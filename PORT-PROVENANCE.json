@@ -1,0 +1,14 @@
+{
+  "donor_repository": "orbis-launcher",
+  "donor_revision": "8f3e315b57006b4f9cd574a5b665fa8b9ca02577",
+  "migration_date": "2026-10-09",
+  "integration": "../orbis-launcher/repositories.lock.json",
+  "upstream": {
+    "version": "3.4.12",
+    "url": "https://github.com/libsdl-org/SDL/releases/download/release-3.4.12/SDL3-3.4.12.tar.gz",
+    "filename": "SDL3-3.4.12.tar.gz",
+    "sha256": "f07b958a9ac5020fb7a44cadb957f658b2149c3c8abb4f63145fac9303249db7",
+    "license": "Zlib (LICENSE.txt in the archive)",
+    "selection": "Controlify 3.5 (Minecraft 26.1) loads SDL 3.4.12 through its FFM bindings (its bundled libSDL3 reports SDL-3.4.12); SHA-256 matches libsdl.org/release."
+  }
+}
