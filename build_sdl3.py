@@ -2,11 +2,11 @@
 """Build SDL3 as the libSDL3 PRX Controlify loads on Minecraft 26.1+.
 
 Controlify 3.5 drives controllers through SDL3 alone (FFM bindings to SDL 3.4.12; its GLFW controller
-manager is gone). This is the pinned SDL release (lwjgl/lwjgl-sources.lock.json) configured as a
+manager is gone). This is the pinned SDL release (PORT-PROVENANCE.json) configured as a
 FreeBSD-like Unix with its dummy video and audio drivers, joystick, gamepad and virtual joystick, and
 nothing that needs a desktop (X11, Wayland, ALSA, PulseAudio, D-Bus, udev) or USB (HIDAPI, libusb):
 the console's controller reaches SDL as a virtual gamepad the compatibility mod feeds
-(lwjgl/sdl/orbis_sdl_gamepad.c, exporting orbis_sdl_gamepad_update). Linked with the
+(orbis_sdl_gamepad.c, exporting orbis_sdl_gamepad_update). Linked with the
 shared Orbis PRX recipe (orbis_prx.py); the build fails unless every function the official
 libSDL3.so of that release exports is exported here too.
 """
@@ -18,13 +18,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-INTEGRATION = Path(os.environ.get("ORBIS_LAUNCHER_ROOT", Path(__file__).resolve().parent.parent / "orbis-launcher")).resolve()
-sys.path.insert(0, str(INTEGRATION / "graphics-probe/tools"))
+HERE = Path(__file__).resolve().parent
+# Shared PRX recipe, input stamps and pinned-archive helper (orbis-runtime-support).
+SUPPORT = Path(os.environ.get('ORBIS_RUNTIME_SUPPORT') or HERE.parent / 'orbis-runtime-support').resolve()
+# Downloads, prepared sources (sources/orbis-compat, sources/mesa) and outputs.
+BUILD = Path(os.environ.get('ORBIS_BUILD_ROOT') or HERE / 'build').resolve()
+sys.path.insert(0, str(SUPPORT))
 import build_stamp  # noqa: E402
-import lwjgl_sources  # noqa: E402
 import orbis_prx  # noqa: E402
+import pinned_archive  # noqa: E402
 
-ROOT = orbis_prx.ROOT
+UPSTREAM = json.loads((HERE / 'PORT-PROVENANCE.json').read_text())['upstream']
 OPTIONS = {
     'SDL_SHARED': 'ON', 'SDL_STATIC': 'OFF', 'SDL_TEST_LIBRARY': 'OFF', 'SDL_TESTS': 'OFF', 'SDL_EXAMPLES': 'OFF',
     'SDL_DISABLE_INSTALL': 'ON', 'SDL_UNIX_CONSOLE_BUILD': 'ON',
@@ -46,10 +50,10 @@ def main():
     parser.add_argument('--sdk', default='/home/wonder/ps4-payload-sdk')
     parser.add_argument('--toolchain', default='/home/wonder/PS4Toolchain')
     parser.add_argument('--paid', default='0x3800000000000011')
-    parser.add_argument('--downloads', default=str(ROOT / 'build/downloads'))
+    parser.add_argument('--downloads', default=str(BUILD / 'downloads'))
     parser.add_argument('--fetch', action='store_true', help='download the pinned archive if missing')
     parser.add_argument('--reference', help="the official libSDL3.so of the pinned release, whose exports must be met")
-    parser.add_argument('--output', default=str(ROOT / 'build/sdl3'))
+    parser.add_argument('--output', default=str(BUILD / 'sdl3'))
     arguments = parser.parse_args()
     out = Path(arguments.output).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -58,8 +62,8 @@ def main():
 
     cmake_version = subprocess.run(['cmake', '--version'], capture_output=True, text=True, check=True).stdout
     stamp = (orbis_prx.stamp_recipe(build_stamp.Stamp(out, 'sdl3'), tools)
-             .files(Path(__file__), Path(lwjgl_sources.__file__), ROOT / 'lwjgl/lwjgl-sources.lock.json',
-                    ROOT / 'lwjgl/sdl/orbis_sdl_gamepad.c')
+             .files(Path(__file__), Path(pinned_archive.__file__), HERE / 'PORT-PROVENANCE.json',
+                    HERE / 'orbis_sdl_gamepad.c')
              .value('cmake', cmake_version)
              .value('arguments', {k: v for k, v in vars(arguments).items() if k not in ('fetch', 'downloads')}))
     if stamp.current(out / 'sdl3-audit.json', out / 'libSDL3.so', out / 'libSDL3.prx'):
@@ -67,7 +71,7 @@ def main():
         return
     stamp.invalidate()
 
-    source = lwjgl_sources.extract(lwjgl_sources.archive('sdl3', Path(arguments.downloads), arguments.fetch),
+    source = pinned_archive.extract(pinned_archive.archive(UPSTREAM, Path(arguments.downloads), arguments.fetch),
                                    out / 'sources')
     # libkernel's pthread rwlocks do not match musl's pthread_rwlock_t (SDL's environment lock read a
     # garbage pointer on the console), and musl's sem_* are FreeBSD ksem syscalls: SDL's portable
@@ -146,8 +150,8 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
     objects = sorted((build / 'CMakeFiles/SDL3-shared.dir').rglob('*.o'))
     if not objects:
         raise SystemExit('no SDL3 objects were built')
-    # The console's controller as a virtual gamepad (lwjgl/sdl/orbis_sdl_gamepad.c), fed by the compat mod.
-    objects.append(tools.compile(ROOT / 'lwjgl/sdl/orbis_sdl_gamepad.c', out / 'orbis_sdl_gamepad.o', '-std=gnu11', '-O2',
+    # The console's controller as a virtual gamepad (orbis_sdl_gamepad.c), fed by the compat mod.
+    objects.append(tools.compile(HERE / 'orbis_sdl_gamepad.c', out / 'orbis_sdl_gamepad.o', '-std=gnu11', '-O2',
                                  '-fshort-wchar', '-isystem', out / 'include-shim', '-I', source / 'include',
                                  '-I', build / 'include-config-release', '-I', build / 'include'))
     required = ()
@@ -163,7 +167,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
     audit, _ = orbis_prx.audit(elf, allowed_needed=('libkernel.so',), jni_prefix=None, jni_count=None,
                                require_onload=False, required_c_exports=(required or ('SDL_Init', 'SDL_AttachVirtualJoystick')) + ('orbis_sdl_gamepad_update', 'orbis_sdl_gamepad_id'))
     audit['prx'] = str(orbis_prx.fself(tools, elf, arguments.paid))
-    summary = {'sdl3': lwjgl_sources.LOCK['sdl3']['version'], 'source_sha256': lwjgl_sources.LOCK['sdl3']['sha256'],
+    summary = {'sdl3': UPSTREAM['version'], 'source_sha256': UPSTREAM['sha256'],
                'reference_functions': len(required), 'options': OPTIONS, 'module': audit}
     (out / 'sdl3-audit.json').write_text(json.dumps(summary, indent=2) + '\n')
     stamp.record()
