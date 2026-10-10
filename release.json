@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "asset": "sdl-orbis.tar.xz",
+  "tag_prefix": "sdl",
+  "outputs": [
+    "sdl3"
+  ]
+}
