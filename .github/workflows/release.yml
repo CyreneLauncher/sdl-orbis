@@ -1,0 +1,85 @@
+name: Release SDL for Orbis
+# Builds this port with the SDKs and dependencies pinned in dependencies.lock.json and, when
+# publish is checked, publishes the result as the release <tag_prefix>-<commit> named in
+# release.json. Cyrene Launcher pins that release by SHA-256 instead of building the port.
+# CYRENE_RELEASES_TOKEN must be able to read the private CyreneLauncher repositories and releases.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the release for this commit
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    env:
+      ORBIS_BUILD_ROOT: ${{ github.workspace }}/build
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: sdl-orbis
+          persist-credentials: false
+      - name: Read pinned dependencies
+        id: deps
+        run: |
+          python3 - <<'PYTHON' >> "$GITHUB_OUTPUT"
+          import json
+          for name, item in json.load(open('sdl-orbis/dependencies.lock.json')).items():
+              for key, value in item.items():
+                  print(f'{name}-{key}={value}')
+          PYTHON
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ steps.deps.outputs['orbis-runtime-support-repository'] }}
+          ref: ${{ steps.deps.outputs['orbis-runtime-support-revision'] }}
+          path: orbis-runtime-support
+          token: ${{ secrets.CYRENE_RELEASES_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang-18 lld-18 llvm-18 cmake ninja-build pkg-config python3-pyelftools
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+      - name: Provision pinned SDKs
+        run: python3 orbis-runtime-support/provision_sdk.py --destination "$RUNNER_TEMP/orbis-sdk"
+      - name: Build SDL
+        run: python3 sdl-orbis/build_sdl3.py --sdk "$ORBIS_SDK" --toolchain "$PS4_TOOLCHAIN" --fetch
+      - name: Save logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: logs
+          path: |
+            build/sdl3/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Pack release asset
+        run: |
+          python3 orbis-runtime-support/release_archive.py pack --root "$ORBIS_BUILD_ROOT" \
+            --spec sdl-orbis/release.json --dist dist
+          (cd dist && sha256sum ./*.tar.xz | sed 's# \./# #' > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix=$(python3 -c "import json;print(json.load(open('sdl-orbis/release.json'))['tag_prefix'])")
+          gh release create "$prefix-${GITHUB_SHA::12}" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "SDL for Orbis ${GITHUB_SHA::12}" \
+            --notes "Built on GitHub-hosted Ubuntu from commit $GITHUB_SHA with the SDKs and dependencies pinned in dependencies.lock.json. The archive holds the build outputs listed in release.json and a SHA-256 inventory; unpack it with orbis-runtime-support's release_archive.py."
